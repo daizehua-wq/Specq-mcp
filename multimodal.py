@@ -3,6 +3,7 @@ multimodal.py — SpecQ v2.0 多模态输入模块
 图片 OCR / 语音转录 / 视频关键帧提取
 """
 import os
+import warnings
 
 
 async def process_image(image_path: str) -> str:
@@ -42,6 +43,7 @@ async def process_audio(audio_path: str) -> str:
 
 async def process_video(video_path: str) -> str:
     """提取视频关键帧 + 语音转录，返回文本摘要。"""
+    warnings.warn("视频关键帧提取暂未实现，当前仅返回元数据", FutureWarning, stacklevel=2)
     if not os.path.exists(video_path):
         return ""
     fname = os.path.basename(video_path)

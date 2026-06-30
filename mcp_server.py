@@ -320,6 +320,9 @@ async def specq_log_visit(
     if not visit_date:
         visit_date = date.today().isoformat()
 
+    if customer_id <= 0:
+        return json.dumps({"error": "customer_id 必须为正整数"}, ensure_ascii=False)
+
     # === 多模态处理 ===
     extra_text: list[str] = []
     if audio_path and os.path.exists(audio_path):

@@ -43,13 +43,13 @@ def get_chroma_collection():
 
 
 def embed_text(text: str) -> list[float]:
-    """调用用户配置的 Embedding API，返回向量（同步，使用 requests）。"""
+    """调用用户配置的 Embedding API，返回向量（使用 httpx）。"""
     cfg = get_embedding_config()
     if not cfg["key"]:
         raise RuntimeError("EMBEDDING_API_KEY 环境变量未设置，请在 .env 中配置")
-    import requests
+    import httpx
     try:
-        resp = requests.post(
+        resp = httpx.post(
             cfg["url"],
             json={"model": cfg["model"], "input": text},
             headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
