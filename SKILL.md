@@ -3,7 +3,7 @@ name: specq-intel-sales
 slug: specq-intel-sales
 displayName: SpecQ 攻单情报包
 description: "SpecQ — 半导体产业链销售攻单情报包。输入客户+产品，AI 自动整理暗知识（拜访记录/丢单复盘/竞品情报），生成八模块攻单策略，提高成交率。阶段一聚焦电子化学品。"
-version: "2.1.0"
+version: "2.1.2"
 author: daizehua-wq
 license: Apache-2.0
 tags: [sales, semiconductor, intel, crm, dark-knowledge]
@@ -12,6 +12,29 @@ tags: [sales, semiconductor, intel, crm, dark-knowledge]
 # SpecQ Skill v2.1 — 半导体产业链销售攻单情报包
 
 > 整理暗知识（拜访记录 + 丢单复盘 + 竞品情报）→ 客户画像 + 使用场景 + 竞品动态 + 成交策略 → 提高成交率 | 阶段一聚焦电子化学品
+
+## ⚠️ 首次安装必配
+
+**LLM_API_KEY 是强制依赖，不配 Skill 无法工作。**
+
+SpecQ 的核心能力（情报生成、暗数据合成、行动建议）依赖大模型。安装后**第一步**就是配置 API Key：
+
+```bash
+# 在 SpecQ 项目根目录创建 .env 文件
+echo "LLM_API_KEY=你的DeepSeek_API_Key" > .env
+```
+
+> **为什么需要单独配置？**
+> 
+> SpecQ MCP Server 独立运行，不共用 Agent 的 LLM。配一个 Key 即可，不需要部署数据库或 Web 服务。
+> 
+> **去哪拿 Key？** → [DeepSeek API Keys](https://platform.deepseek.com/api_keys)（新用户送 500 万 tokens）
+> 
+> **不想花钱？** 本地部署 Ollama + Qwen 也能跑，改 `.env` 里 `LLM_BASE_URL` 指向本地。
+
+不配 Key 的唯一后果：Skill 安装成功但所有生成操作报错 `LLM_API_KEY not set`。
+
+---
 
 ## 📦 安装指引
 
@@ -23,13 +46,15 @@ openclaw skills install daizehua-wq/specq-intel-sales
 ```
 MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-API-Key）
 
+安装后**立即按上方 ⚠️ 指引配置 LLM_API_KEY**，否则无法使用。
+
 ### WorkBuddy（腾讯桌面 Agent）
 
 在 WorkBuddy 左侧「技能」面板搜索 `specq-intel-sales` 安装本 Skill。
 
 安装后，**复制下面这段话发给 WorkBuddy**，它会自动帮你配置 MCP 连接：
 
-> 帮我配置 SpecQ MCP 服务器：从 https://github.com/daizehua-wq/Specq-mcp 下载 specq_mcp_client.py 到本地，然后创建 ~/.workbuddy/mcp.json 加上 specq 配置，命令 python specq_mcp_client.py，环境变量 SPECQ_MCP_URL=http://119.91.223.127:8001/mcp，SPECQ_MCP_API_KEY=填入你的密钥。然后 pip install mcp httpx。
+> 帮我配置 SpecQ MCP 服务器：从 https://github.com/daizehua-wq/Specq-mcp 下载 specq_mcp_client.py 到本地，然后创建 ~/.workbuddy/mcp.json 加上 specq 配置，命令 python specq_mcp_client.py，环境变量 SPECQ_MCP_URL=http://119.91.223.127:8001/mcp，SPECQ_MCP_API_KEY=填入你的密钥。然后 pip install mcp httpx。另外在项目目录创建 .env，写入 LLM_API_KEY=你的DeepSeek_API_Key。
 
 ## 适用场景
 
@@ -200,7 +225,7 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 
 **Q: 服务器连不上怎么办？**
 
-检查 SpecQ MCP Server 是否运行在 `http://localhost:8001`。如果服务器挂了，Skill 会明确报错而非静默失败，重启服务器即可恢复。
+SpecQ 有本地降级模式：当远程服务器不可达时，自动切换到本地 LLM 直连，不影响使用。前提是 `.env` 里配了 `LLM_API_KEY`（见上方 ⚠️ 首次安装必配）。
 
 **Q: 怎么开始用？**
 

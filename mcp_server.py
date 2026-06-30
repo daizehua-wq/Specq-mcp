@@ -255,21 +255,27 @@ async def specq_generate_intel(
                     )
         except Exception as e:
             _log.warning(f"暗数据注入失败: {e}")
-        resp = await client.post(
-            f"{base_url}/api/intel/generate",
-            json={
-                "product": product,
-                "application": application,
-                "scenario": enhanced_scenario,
-            },
-            headers=headers,
-            timeout=120.0,
-        )
-        if resp.status_code != 200:
-            return f"Error: SpecQ 服务返回 {resp.status_code}: {resp.text[:500]}"
-
-        data = resp.json()
-        reply_text = data.get("reply", "（情报包生成失败）")
+        # === 生成情报包（优先 FastAPI，不可达时降级到本地 LLM） ===
+        try:
+            resp = await client.post(
+                f"{base_url}/api/intel/generate",
+                json={
+                    "product": product,
+                    "application": application,
+                    "scenario": enhanced_scenario,
+                },
+                headers=headers,
+                timeout=120.0,
+            )
+            if resp.status_code != 200:
+                raise ConnectionError(f"FastAPI returned {resp.status_code}")
+            data = resp.json()
+            reply_text = data.get("reply", "")
+        except Exception as e:
+            _log.warning(f"FastAPI 不可达，启用本地降级模式: {e}")
+            reply_text = await _generate_intel_local(
+                product, application, enhanced_scenario
+            )
 
         # === 脱敏后处理 ===
         if anonymize and reply_text:
@@ -700,6 +706,98 @@ async def specq_feedback(
         pass
 
     return result
+
+
+# ======================== 本地 LLM 降级辅助 ========================
+
+async def _generate_intel_local(
+    product: str,
+    application: str,
+    enhanced_scenario: str,
+) -> str:
+    """本地 LLM 直接生成情报包。当 FastAPI 不可达时，跳过中转直接调 DeepSeek/Ollama。"""
+    try:
+        import openai
+        llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
+        llm_base = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
+        llm_model = os.getenv("LLM_MODEL", "deepseek-chat")
+        if not llm_api_key:
+            return (
+                "Error: LLM_API_KEY 未配置 — SpecQ 需要 LLM 才能生成情报包。\n"
+                "请在项目根目录创建 .env 文件：\n"
+                "  echo 'LLM_API_KEY=sk-xxx' > .env\n"
+                "或本地部署 Ollama，设置：\n"
+                "  LLM_BASE_URL=http://localhost:11434/v1\n"
+                "  LLM_MODEL=qwen3\n"
+            )
+
+        client_llm = openai.AsyncOpenAI(api_key=llm_api_key, base_url=llm_base)
+
+        system_prompt = """你是半导体产业链电子化学品销售专家 FAE。根据输入的产品信息、应用场景和历史数据，生成一份结构化的攻单情报包。
+
+严格按以下八模块输出 Markdown：
+
+## 1. 产品概览
+- 产品定义、核心功能、适用工艺段（基于公开资料整理）
+- 标注数据来源
+
+## 2. 技术指标对比
+- 关键参数 vs 竞品/行业标准
+- 用表格呈现
+
+## 3. 竞品格局
+- 主要竞品、市占、差异化优势
+- 标注信息来源
+
+## 4. 客户关注指标
+- 该客户/行业重点关注的技术参数
+- 数据来自暗数据时标注来源，无数据时标注 [经验推断]
+
+## 5. 切入机会
+- 当前该客户的切入窗口和建议切入点
+- 基于暗数据或经验分析
+
+## 6. 导入障碍
+- 历史丢单原因、技术壁垒、认证周期
+- 标注数据来源
+
+## 7. 行动建议
+- 拜访话术建议、演示重点、报价策略
+- 给出可执行的具体步骤
+
+## 8. 参考来源
+- 每个模块的数据来源和置信度
+- 用户需实际验证信息准确性
+
+规则：
+- 没有历史数据时，标注 [经验推断，暂无销售数据支撑]
+- 有暗数据时优先使用，标注 [来自销售拜访记录]
+- 有联网搜索结果时标注 [来自联网搜索]
+- 不编造具体客户名称、联系方式
+- 直接输出 Markdown，不要输出前言/后缀寒暄"""
+
+        user_prompt = f"""生成以下产品的攻单情报包：
+
+产品：{product}
+应用场景：{application}
+
+附加上下文：
+{enhanced_scenario}"""
+
+        resp = await client_llm.chat.completions.create(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=4000,
+        )
+        return resp.choices[0].message.content or "（情报包生成返回为空）"
+
+    except Exception as e:
+        _log.error(f"本地 LLM 降级失败: {e}")
+        return f"Error: 情报包生成失败 — FastAPI 不可达且本地 LLM 调用异常: {e}"
 
 
 if __name__ == "__main__":
