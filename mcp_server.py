@@ -19,9 +19,12 @@ import search as sch
 import multimodal as mm
 import output as out
 
+import logger as log_mod
+
 load_dotenv()
 
 mcp = FastMCP("specq", host="0.0.0.0", port=8001)
+_log = log_mod.get_logger("mcp_server")
 
 
 # ======================== 配置辅助函数 ========================
@@ -205,8 +208,8 @@ async def specq_generate_intel(
                     for r in search_result["results"]
                 )
                 enhanced_scenario += f"\n\n【联网搜索补充数据】\n{web_snippets}"
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(f"记忆写入失败(feedback): {e}")
 
         # 注入历史记忆上下文块
         if context_block:
@@ -250,10 +253,8 @@ async def specq_generate_intel(
                         f"【销售暗数据参考——来自真实拜访记录，优先使用】\n"
                         f"{insights_text}"
                     )
-        except Exception:
-            pass
-
-        # === 调用情报生成 API ===
+        except Exception as e:
+            _log.warning(f"暗数据注入失败: {e}")
         resp = await client.post(
             f"{base_url}/api/intel/generate",
             json={
@@ -319,6 +320,9 @@ async def specq_log_visit(
     if not visit_date:
         visit_date = date.today().isoformat()
 
+    if customer_id <= 0:
+        return json.dumps({"error": "customer_id 必须为正整数"}, ensure_ascii=False)
+
     # === 多模态处理 ===
     extra_text: list[str] = []
     if audio_path and os.path.exists(audio_path):
@@ -326,8 +330,8 @@ async def specq_log_visit(
             audio_text = await mm.process_audio(audio_path)
             if audio_text:
                 extra_text.append(f"【语音转录】{audio_text[:500]}")
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(f"音频转录失败: {e}")
 
     if image_paths:
         for img in image_paths[:5]:
@@ -336,16 +340,16 @@ async def specq_log_visit(
                     img_text = await mm.process_image(img)
                     if img_text:
                         extra_text.append(f"【图片 OCR】{img_text[:300]}")
-                except Exception:
-                    pass
+                except Exception as e_img:
+                    _log.warning(f"图片OCR失败: {e_img}")
 
     if video_path and os.path.exists(video_path):
         try:
             vid_text = await mm.process_video(video_path)
             if vid_text:
                 extra_text.append(f"【视频摘要】{vid_text[:500]}")
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(f"视频处理失败: {e}")
 
     if extra_text:
         content = content + "\n\n" + "\n\n".join(extra_text)
@@ -507,8 +511,8 @@ async def specq_extract_insights(
             rows = conn.execute(db_query).fetchall()
             db_data = [dict(r) for r in rows[:100]]
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(f"本地数据库查询失败: {e}")
 
     # 4. 额外数据源 — 在线 API
     api_data = []
@@ -519,8 +523,8 @@ async def specq_extract_insights(
                 if r.status_code == 200:
                     raw = r.json()
                     api_data = raw if isinstance(raw, list) else [raw]
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(f"在线API数据拉取失败: {e}")
 
     # 5. 构建提示词
     visits_text = json.dumps(all_visits[:20], ensure_ascii=False, indent=2)
@@ -678,8 +682,8 @@ async def specq_feedback(
                     "timestamp": str(date.today()),
                 }],
             )
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(f"记忆写入失败(feedback): {e}")
 
     # === 成交率埋点日志 ===
     try:

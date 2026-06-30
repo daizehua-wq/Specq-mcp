@@ -2,6 +2,7 @@
 output.py — SpecQ v2.0 多格式输出模块
 Markdown → Word / PPT / Email / Chat 格式转换
 """
+import warnings
 from datetime import date
 
 
@@ -43,6 +44,7 @@ def format_output(markdown_text: str, output_format: str, metadata: dict | None 
         return _truncate(markdown_text, 300)
 
     elif output_format == "docx":
+        warnings.warn("docx 输出尚未实现完整 Word 文档生成，当前仅返回模板提示", FutureWarning, stacklevel=2)
         return (
             f"[Word 文档模板已就绪]\n"
             f"标题: {metadata.get('product', '')} 攻单情报包\n"
@@ -53,6 +55,7 @@ def format_output(markdown_text: str, output_format: str, metadata: dict | None 
         )
 
     elif output_format == "ppt":
+        warnings.warn("ppt 输出尚未实现完整 PPT 生成，当前仅返回大纲提示", FutureWarning, stacklevel=2)
         # 提取 Markdown 标题行作为 PPT 大纲
         slides = _extract_headings(markdown_text)
         outline = "\n".join(f"  • Slide {i+1}: {h}" for i, h in enumerate(slides[:20]))

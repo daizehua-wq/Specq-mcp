@@ -1,6 +1,17 @@
-# SpecQ 攻单情报包 — 电子化学品销售 Skill v1.1
+---
+name: specq-intel-sales
+slug: specq-intel-sales
+displayName: SpecQ 攻单情报包
+description: "SpecQ — 半导体产业链销售攻单情报包。输入客户+产品，AI 自动整理暗知识（拜访记录/丢单复盘/竞品情报），生成八模块攻单策略，提高成交率。阶段一聚焦电子化学品。"
+version: "2.1.0"
+author: daizehua-wq
+license: Apache-2.0
+tags: [sales, semiconductor, intel, crm, dark-knowledge]
+---
 
-> 版本：v1.2 | 更新：2026-06-24 | 新增跨平台安装指引（OpenClaw / WorkBuddy）
+# SpecQ Skill v2.1 — 半导体产业链销售攻单情报包
+
+> 整理暗知识（拜访记录 + 丢单复盘 + 竞品情报）→ 客户画像 + 使用场景 + 竞品动态 + 成交策略 → 提高成交率 | 阶段一聚焦电子化学品
 
 ## 📦 安装指引
 
@@ -178,3 +189,27 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 - 自动推送情报包到飞书/邮件
 - 竞品实时价格
 - 记忆合并/去重
+
+---
+
+## 常见问题
+
+**Q: 我的客户数据安全吗？**
+
+情报包输出中客户真实名称会被脱敏为行业标签。暗数据存储在本地的 ChromaDB 和 JSON 文件中，不会上传到任何第三方服务器。整个 Skill 可在内网环境运行。
+
+**Q: 服务器连不上怎么办？**
+
+检查 SpecQ MCP Server 是否运行在 `http://localhost:8001`。如果服务器挂了，Skill 会明确报错而非静默失败，重启服务器即可恢复。
+
+**Q: 怎么开始用？**
+
+直接说"帮我做XX产品的情报包，客户XX，关注XX"，Skill 会自动引导补全缺失的参数。不需要先读文档。
+
+**Q: 支持哪些输出格式？**
+
+Markdown（默认，完整八模块）、邮件（摘要+主题）、聊天（300字精简）。Word 和 PPT 格式正在开发中。
+
+**Q: 新客户没有历史数据怎么办？**
+
+Skill 会自动跳过记忆召回，标注 `[经验推断]` 生成情报包。见完客户后用 `feedback` 记录结果，下次就有数据了。
