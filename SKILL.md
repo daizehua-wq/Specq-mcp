@@ -47,12 +47,12 @@ echo "LLM_API_KEY=你的DeepSeek_API_Key" > .env
 ### .env 最小配置
 
 ```bash
-LLM_API_KEY=sk-***
+LLM_API_KEY=sk-<your-deepseek-api-key>
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
 
 # 可选：Embedding（用于语义记忆搜索）
-EMBEDDING_API_KEY=sk-***
+EMBEDDING_API_KEY=sk-<your-embedding-api-key>
 EMBEDDING_API_URL=https://api.deepseek.com/v1/embeddings
 EMBEDDING_MODEL=deepseek-embed
 ```
