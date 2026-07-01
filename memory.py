@@ -43,26 +43,43 @@ def get_chroma_collection():
 
 
 def embed_text(text: str) -> list[float]:
-    """调用用户配置的 Embedding API，返回向量（使用 httpx）。"""
+    """文本向量化。有 Embedding API Key 时走 API，无 Key 时降级为本地简单哈希向量。"""
     cfg = get_embedding_config()
-    if not cfg["key"]:
-        raise RuntimeError("EMBEDDING_API_KEY 环境变量未设置，请在 .env 中配置")
-    import httpx
-    try:
-        resp = httpx.post(
-            cfg["url"],
-            json={"model": cfg["model"], "input": text},
-            headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Embedding API 返回 {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()
-        return data["data"][0]["embedding"]
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Embedding 失败: {e}") from e
+    if cfg["key"]:
+        import httpx
+        try:
+            resp = httpx.post(
+                cfg["url"],
+                json={"model": cfg["model"], "input": text},
+                headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["data"][0]["embedding"]
+        except Exception:
+            pass  # API 失败，走降级
+    # 降级：基于词频的简单哈希向量
+    return _hash_embed(text)
+
+
+def _hash_embed(text: str, dim: int = 768) -> list[float]:
+    """本地哈希向量化。无需任何 API，作为 Embedding 的降级方案。"""
+    import hashlib
+    import re
+    words = re.findall(r'[\w\u4e00-\u9fff]+', text.lower())
+    if not words:
+        return [0.0] * dim
+    vec = [0.0] * dim
+    for i, word in enumerate(words[:200]):
+        h = int(hashlib.md5(word.encode()).hexdigest(), 16)
+        idx = h % dim
+        vec[idx] += 1.0
+    # 归一化
+    norm = sum(v * v for v in vec) ** 0.5
+    if norm > 0:
+        vec = [v / norm for v in vec]
+    return vec
 
 
 def load_working_memory(uid: str) -> dict:

@@ -1,5 +1,5 @@
 """
-mcp_server.py — SpecQ MCP Server v2.3
+mcp_server.py — SpecQ MCP Server v2.3.1
 纯本地独立进程，Agent 直接 stdio 启动，通过 MCP Sampling 复用 Agent LLM，零 API Key 配置
 Tool 数量: 6（generate_intel / log_visit / extract_insights / feedback / memory / search）
 """

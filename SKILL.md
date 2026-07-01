@@ -3,7 +3,7 @@ name: specq-intel-sales
 slug: specq-intel-sales
 displayName: SpecQ 攻单情报包
 description: "SpecQ — 半导体产业链销售攻单情报包。输入客户+产品，AI 自动整理暗知识（拜访记录/丢单复盘/竞品情报），生成八模块攻单策略，提高成交率。阶段一聚焦电子化学品。"
-version: "2.3.0"
+version: "2.3.1"
 author: daizehua-wq
 license: Apache-2.0
 tags: [sales, semiconductor, intel, crm, dark-knowledge]
@@ -36,6 +36,15 @@ Agent 通过 stdio 启动 MCP Server：
   }
 }
 ```
+
+### 外部 API 依赖（可选）
+
+SpecQ 核心功能零依赖即可运行。以下为可选增强：
+
+| 功能 | 需要 | 不配的影响 |
+|---|---|---|
+| Embedding 语义搜索 | `EMBEDDING_API_KEY` | 自动降级为本地哈希向量，精度略低 |
+| 联网搜索 | `SEARCH_API_KEY`（Brave Search） | 搜索返回空，不影响情报包生成 |
 
 ---
 
@@ -224,3 +233,15 @@ Markdown（默认，完整八模块）、邮件（摘要+主题）、聊天（30
 **Q: 新客户没有历史数据怎么办？**
 
 Skill 会自动跳过记忆召回，标注 `[经验推断]` 生成情报包。见完客户后用 `feedback` 记录结果，下次就有数据了。
+
+**Q: 联网搜索能用吗？**
+
+联网搜索使用 Brave Search API，需要申请免费 API Key 并设置环境变量 `SEARCH_API_KEY`。不配 Key 时搜索返回空结果，不影响情报包主流程。
+
+**Q: 离线能用吗？**
+
+可以。情报包生成、拜访记录、记忆召回均离线运行。仅联网搜索和 Embedding 增强需要外部 API，缺失时会自动降级。
+
+**Q: Word / PPT 导出能用吗？**
+
+正在开发中。当前 `output_format="docx"` 或 `"ppt"` 会返回结构化大纲，供手动制作参考。Markdown 格式功能完整。
