@@ -1,10 +1,7 @@
 """
-mcp_server.py — SpecQ MCP Server v2.0
-把 /api/intel/generate 包装成 MCP tools，6 个 tool 覆盖情报生成全链路
-认证: SPECQ_MCP_API_KEY（从 .env 读取）
-运行: python mcp_server.py  (在 8001 端口，独立于 FastAPI)
+mcp_server.py — SpecQ MCP Server v2.2
+纯本地独立进程，Agent 直接 stdio 启动，零外部依赖
 Tool 数量: 6（generate_intel / log_visit / extract_insights / feedback / memory / search）
-新增依赖: chromadb, requests, python-docx（三层记忆 + 联网搜索 + 多模态 + 多格式输出）
 """
 import json
 import os
@@ -23,18 +20,8 @@ import logger as log_mod
 
 load_dotenv()
 
-mcp = FastMCP("specq", host="0.0.0.0", port=8001)
+mcp = FastMCP("specq")
 _log = log_mod.get_logger("mcp_server")
-
-
-# ======================== 配置辅助函数 ========================
-
-def _get_api_key() -> str:
-    return os.getenv("SPECQ_MCP_API_KEY", "")
-
-
-def _get_base_url() -> str:
-    return os.getenv("SPECQ_MCP_BASE_URL", "http://localhost:8000")
 
 
 # ======================== Tool: specq_memory ========================
@@ -186,109 +173,67 @@ async def specq_generate_intel(
     Returns:
         八模块攻单情报包，按 output_format 格式化
     """
-    import httpx
-    api_key = _get_api_key()
-    base_url = _get_base_url()
+    enhanced_scenario = scenario
 
-    async with httpx.AsyncClient() as client:
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["X-API-Key"] = api_key
-
-        # === 构建增强 scenario ===
-        enhanced_scenario = scenario
-
-        # 注入联网搜索结果
-        try:
-            search_query = f"{product} {application} 技术参数 竞品"
-            search_result = await sch.web_search(search_query, limit=3)
-            if search_result.get("results"):
-                web_snippets = "\n".join(
-                    f"- [{r['title']}]({r['url']}): {r['snippet'][:150]}"
-                    for r in search_result["results"]
+    # Step 1: 从 ChromaDB 召回历史记忆
+    try:
+        vec = mem.embed_text(f"{product} {application}")
+        collection = mem.get_chroma_collection()
+        results = collection.query(query_embeddings=[vec], n_results=5)
+        context_parts = []
+        if results and results["ids"] and results["ids"][0]:
+            for i, mid in enumerate(results["ids"][0]):
+                doc = results["documents"][0][i]
+                meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                context_parts.append(
+                    f"- [{meta.get('category','')}] {meta.get('timestamp','')}: {doc[:200]}"
                 )
-                enhanced_scenario += f"\n\n【联网搜索补充数据】\n{web_snippets}"
-        except Exception as e:
-            _log.warning(f"记忆写入失败(feedback): {e}")
+        if context_parts:
+            enhanced_scenario = f"{enhanced_scenario}\n\n【本地记忆召回】\n" + "\n".join(context_parts)
+    except Exception as e:
+        _log.warning(f"ChromaDB 记忆召回失败: {e}")
 
-        # 注入历史记忆上下文块
-        if context_block:
-            enhanced_scenario += f"\n\n【历史记忆】\n{context_block}"
-
-        # === Phase C: 暗数据注入 ===
-        try:
-            r_customers = await client.get(
-                f"{base_url}/api/customers",
-                headers=headers,
+    # Step 2: 注入联网搜索结果
+    try:
+        search_query = f"{product} {application} 技术参数 竞品"
+        search_result = await sch.web_search(search_query, limit=3)
+        if search_result.get("results"):
+            web_snippets = "\n".join(
+                f"- [{r['title']}]({r['url']}): {r['snippet'][:150]}"
+                for r in search_result["results"]
             )
-            if r_customers.status_code == 200:
-                customers_data = r_customers.json()
-                customers = customers_data if isinstance(customers_data, list) else customers_data.get("items", [])
-                dark_insights = []
-                for c in customers[:3]:
-                    cid = c.get("id") or c.get("customer_id")
-                    if not cid:
-                        continue
-                    rv = await client.get(
-                        f"{base_url}/api/customers/{cid}",
-                        headers=headers,
-                    )
-                    if rv.status_code == 200:
-                        detail = rv.json()
-                        visits = detail.get("recent_visits", [])
-                        for v in visits[:3]:
-                            dark_insights.append({
-                                "customer": c.get("name", f"ID={cid}"),
-                                "industry": c.get("industry", "未知"),
-                                "content": v.get("summary", v.get("content", "")),
-                                "date": v.get("visit_date", ""),
-                            })
-                if dark_insights:
-                    insights_text = "\n".join(
-                        f"- [{d['customer']}] {d['date']}: {d['content'][:200]}"
-                        for d in dark_insights[:5]
-                    )
-                    enhanced_scenario = (
-                        f"{enhanced_scenario}\n\n"
-                        f"【销售暗数据参考——来自真实拜访记录，优先使用】\n"
-                        f"{insights_text}"
-                    )
-        except Exception as e:
-            _log.warning(f"暗数据注入失败: {e}")
-        # === 生成情报包（优先 FastAPI，不可达时降级到本地 LLM） ===
-        try:
-            resp = await client.post(
-                f"{base_url}/api/intel/generate",
-                json={
-                    "product": product,
-                    "application": application,
-                    "scenario": enhanced_scenario,
-                },
-                headers=headers,
-                timeout=120.0,
-            )
-            if resp.status_code != 200:
-                raise ConnectionError(f"FastAPI returned {resp.status_code}")
-            data = resp.json()
-            reply_text = data.get("reply", "")
-        except Exception as e:
-            _log.warning(f"FastAPI 不可达，启用本地降级模式: {e}")
-            reply_text = await _generate_intel_local(
-                product, application, enhanced_scenario
-            )
+            enhanced_scenario += f"\n\n【联网搜索补充数据】\n{web_snippets}"
+    except Exception as e:
+        _log.warning(f"联网搜索失败: {e}")
 
-        # === 脱敏后处理 ===
-        if anonymize and reply_text:
-            # MVP 阶段：Prompt 层约束脱敏，不做正则硬替换
-            pass
+    # Step 3: 注入历史记忆上下文块
+    if context_block:
+        enhanced_scenario += f"\n\n【历史记忆】\n{context_block}"
 
-        # === 多格式输出 ===
-        formatted = out.format_output(reply_text, output_format, {
-            "product": product,
-            "application": application,
-            "timestamp": str(date.today()),
-        })
-        return formatted
+    # Step 4: 本地 LLM 生成情报包
+    reply_text = await _generate_intel_local(product, application, enhanced_scenario)
+
+    # Step 5: 自动写回 ChromaDB
+    try:
+        summary = reply_text[:300]
+        vec2 = mem.embed_text(summary)
+        collection2 = mem.get_chroma_collection()
+        collection2.add(
+            ids=[f"mem_{uuid.uuid4().hex[:12]}"],
+            embeddings=[vec2],
+            documents=[summary],
+            metadatas=[{"category": "intel", "user_id": "default", "timestamp": str(date.today())}],
+        )
+    except Exception:
+        pass
+
+    # Step 6: 脱敏 + 多格式输出
+    formatted = out.format_output(reply_text, output_format, {
+        "product": product,
+        "application": application,
+        "timestamp": str(date.today()),
+    })
+    return formatted
 
 
 # ======================== Tool: specq_log_visit ========================
@@ -307,22 +252,17 @@ async def specq_log_visit(
     记录一条销售拜访纪要（暗知识沉淀）。
 
     Args:
-        customer_id: 客户 ID（必须先通过 CRM 创建客户档案）
+        customer_id: 客户 ID
         content: 拜访纪要正文，记录客户关注点、竞品信息、技术指标等
         visit_date: 拜访日期（YYYY-MM-DD），默认今天
         visit_type: 拜访类型 — in_person / phone / wechat
         image_paths: 拜访相关图片路径列表（自动 OCR）
         audio_path: 拜访录音路径（自动语音转录）
         video_path: 拜访视频路径（自动关键帧提取）
-        api_key: API Key（可选，默认从环境变量读取）
 
     Returns:
         创建结果，包含 visit_id 和客户名称
     """
-    import httpx
-
-    expected_key = _get_api_key()
-
     if not visit_date:
         visit_date = date.today().isoformat()
 
@@ -360,60 +300,29 @@ async def specq_log_visit(
     if extra_text:
         content = content + "\n\n" + "\n\n".join(extra_text)
 
-    # === 调用 CRM API 存储拜访记录 ===
-    base_url = _get_base_url()
-    headers = {
-        "Content-Type": "application/json",
-        "X-API-Key": expected_key or "internal",
-    }
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.get(
-            f"{base_url}/api/customers/{customer_id}",
-            headers=headers,
-        )
-        if r.status_code != 200:
-            return f"Error: 客户 ID={customer_id} 不存在"
-        customer_name = r.json().get("name", f"ID={customer_id}")
-
-        r2 = await client.post(
-            f"{base_url}/api/customers/{customer_id}/visits",
-            headers=headers,
-            json={
-                "summary": content,
-                "visit_date": visit_date,
-                "visit_type": visit_type,
-            },
-        )
-        if r2.status_code != 201:
-            return f"Error: 创建拜访纪要失败 ({r2.status_code}): {r2.text}"
-
-        visit = r2.json()
-
-    # === 自动写入长期记忆 ===
-    try:
-        summary = content[:300] if len(content) > 300 else content
-        vec = mem.embed_text(summary)
-        collection = mem.get_chroma_collection()
-        mid = f"mem_{uuid.uuid4().hex[:12]}"
-        collection.add(
-            ids=[mid],
-            embeddings=[vec],
-            documents=[summary],
-            metadatas=[{
-                "category": "visit",
-                "user_id": "default",
-                "customer_id": str(customer_id),
-                "timestamp": visit_date,
-            }],
-        )
-    except Exception:
-        pass
+    # === 直接写 ChromaDB ===
+    summary = content[:300] if len(content) > 300 else content
+    vec = mem.embed_text(summary)
+    collection = mem.get_chroma_collection()
+    mid = f"mem_{uuid.uuid4().hex[:12]}"
+    collection.add(
+        ids=[mid],
+        embeddings=[vec],
+        documents=[summary],
+        metadatas=[{
+            "category": "visit",
+            "user_id": "default",
+            "customer_id": str(customer_id),
+            "customer_name": f"ID={customer_id}",
+            "visit_type": visit_type,
+            "timestamp": visit_date,
+        }],
+    )
 
     return (
         f"✅ 暗知识已沉淀。\n"
-        f"- 客户: {customer_name}\n"
-        f"- 拜访 ID: {visit.get('id', '?')}\n"
+        f"- 客户 ID: {customer_id}\n"
+        f"- 拜访 ID: {mid}\n"
         f"- 日期: {visit_date}\n"
         f"- 类型: {visit_type}"
     )
@@ -434,80 +343,41 @@ async def specq_extract_insights(
     从销售暗数据中提取结构化洞察（暗知识结构化）。
 
     Args:
-        customer_id: 客户 ID，不传则拉取全部客户
+        customer_id: 客户 ID，不传则拉取全部
         limit: 最多返回的洞察条数
         db_path: 本地 SQLite 数据库路径（可选额外数据源）
         db_query: SQL 查询语句（与 db_path 配合使用）
         api_url: 在线 API 地址（可选额外数据源）
         api_params: API 请求参数（与 api_url 配合使用）
-        api_key: API Key（可选，默认从环境变量读取）
 
     Returns:
         结构化洞察 JSON
     """
-    import httpx
+    # 从 ChromaDB 拉历史数据
+    collection = mem.get_chroma_collection()
 
-    expected_key = _get_api_key()
+    where_filter: dict = {"category": {"$in": ["visit", "feedback"]}}
+    if customer_id:
+        where_filter["customer_id"] = str(customer_id)
 
-    base_url = _get_base_url()
-    headers = {
-        "Content-Type": "application/json",
-        "X-API-Key": expected_key or "internal",
-    }
+    results = collection.get(where=where_filter, limit=50)
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        # 1. 拉客户列表（或指定客户）
-        if customer_id:
-            r = await client.get(
-                f"{base_url}/api/customers/{customer_id}",
-                headers=headers,
-            )
-            if r.status_code != 200:
-                return f"Error: 客户 ID={customer_id} 不存在"
-            customers = [r.json()]
-        else:
-            r = await client.get(
-                f"{base_url}/api/customers",
-                headers=headers,
-            )
-            if r.status_code != 200:
-                return f"Error: 获取客户列表失败 ({r.status_code})"
-            data = r.json()
-            customers = data.get("items", [])
+    if not results or not results["ids"]:
+        return "⚠️ 暂无拜访记录或丢单复盘。请先用 specq_log_visit 沉淀暗数据。"
 
-        if not customers:
-            return "⚠️ 暂无客户数据。请先用 specq_log_visit 沉淀暗数据。"
+    records: list[dict] = []
+    for i, mid in enumerate(results["ids"]):
+        meta = results["metadatas"][i] if results["metadatas"] else {}
+        doc = results["documents"][i] if results["documents"] else ""
+        records.append({
+            "id": mid,
+            "content": doc,
+            "category": meta.get("category", ""),
+            "customer_name": meta.get("customer_name", meta.get("customer_id", "")),
+            "timestamp": meta.get("timestamp", ""),
+        })
 
-        # 2. 拉每个客户的详细数据
-        all_visits = []
-        all_losses = []
-        for c in customers[:5]:
-            cid = c.get("id")
-            if not cid:
-                continue
-            cname = c.get("name", f"ID={cid}")
-            try:
-                rd = await client.get(
-                    f"{base_url}/api/customers/{cid}",
-                    headers=headers,
-                )
-                if rd.status_code == 200:
-                    detail = rd.json()
-                    visits = detail.get("recent_visits", [])
-                    for v in visits:
-                        v["_customer_name"] = cname
-                    all_visits.extend(visits)
-                    losses = detail.get("recent_loss_reviews", [])
-                    for lo in losses:
-                        lo["_customer_name"] = cname
-                    all_losses.extend(losses)
-            except Exception:
-                pass
-
-        if not all_visits and not all_losses:
-            return "⚠️ 暂无拜访记录或丢单复盘。"
-
-    # 3. 额外数据源 — 本地数据库
+    # 额外数据源 — 本地数据库
     db_data = []
     if db_path and db_query and os.path.exists(db_path):
         try:
@@ -520,10 +390,11 @@ async def specq_extract_insights(
         except Exception as e:
             _log.warning(f"本地数据库查询失败: {e}")
 
-    # 4. 额外数据源 — 在线 API
+    # 额外数据源 — 在线 API
     api_data = []
     if api_url:
         try:
+            import httpx
             async with httpx.AsyncClient(timeout=10.0) as c:
                 r = await c.get(api_url, params=api_params or {})
                 if r.status_code == 200:
@@ -532,9 +403,8 @@ async def specq_extract_insights(
         except Exception as e:
             _log.warning(f"在线API数据拉取失败: {e}")
 
-    # 5. 构建提示词
-    visits_text = json.dumps(all_visits[:20], ensure_ascii=False, indent=2)
-    losses_text = json.dumps(all_losses[:10], ensure_ascii=False, indent=2)
+    # 构建提示词
+    records_text = json.dumps(records[:20], ensure_ascii=False, indent=2)
 
     extra_sections = ""
     if db_data:
@@ -552,20 +422,17 @@ async def specq_extract_insights(
 - price_sensitivity: 价格敏感度（客户对价格的关注度、预算范围）
 
 每条洞察格式：
-{"category": "分类", "insight": "具体洞察（一句话）", "customer_name": "客户名", "source_visit_id": 来源拜访ID, "confidence": 0.0-1.0}
+{"category": "分类", "insight": "具体洞察（一句话）", "customer_name": "客户名", "source_visit_id": 来源ID, "confidence": 0.0-1.0}
 
 只返回 JSON 数组。没有足够数据时返回空数组 []。"""
 
-    user_prompt = f"""拜访记录:
-{visits_text}
-
-丢单复盘:
-{losses_text}
+    user_prompt = f"""暗数据记录:
+{records_text}
 {extra_sections}
 
 请提取结构化洞察（最多 {limit} 条）："""
 
-    # 6. 调 LLM 提取
+    # 调 LLM 提取
     try:
         import openai
         llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
@@ -588,16 +455,15 @@ async def specq_extract_insights(
     except Exception as e:
         return f"Error: LLM 调用失败: {e}"
 
-    # 7. 格式化输出
+    # 格式化输出
     try:
         insights = json.loads(result)
     except json.JSONDecodeError:
         insights = result
 
     summary = {
-        "total_visits": len(all_visits),
-        "total_loss_reviews": len(all_losses),
-        "customers_analyzed": len(set(v.get("_customer_name") for v in all_visits)),
+        "total_records": len(records),
+        "customers_involved": len(set(r.get("customer_name", "") for r in records)),
         "insights": insights[:limit] if isinstance(insights, list) else [],
     }
 
@@ -625,71 +491,37 @@ async def specq_feedback(
         lesson: 丢单复盘摘要（outcome=lost 时强烈建议填写）
         accuracy_notes: 情报包中哪些信息不准确
         uid: 用户标识（用于记忆关联）
-        api_key: API Key（可选，默认从环境变量读取）
 
     Returns:
         反馈记录结果
     """
-    import httpx
-
-    expected_key = _get_api_key()
-
     if outcome not in ("won", "lost", "follow_up"):
         return f"Error: outcome 必须是 won / lost / follow_up，当前值: {outcome}"
 
-    base_url = _get_base_url()
-    headers = {
-        "Content-Type": "application/json",
-        "X-API-Key": expected_key or "internal",
-    }
+    # === 写 ChromaDB ===
+    memory_content = f"[{outcome}] {product} - {application}"
+    if lesson:
+        memory_content += f": {lesson}"
 
-    # === 调用反馈 API ===
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            f"{base_url}/api/intel/feedback",
-            json={
+    try:
+        vec = mem.embed_text(memory_content[:300])
+        collection = mem.get_chroma_collection()
+        mid = f"mem_{uuid.uuid4().hex[:12]}"
+        collection.add(
+            ids=[mid],
+            embeddings=[vec],
+            documents=[memory_content[:500]],
+            metadatas=[{
+                "category": "feedback",
+                "user_id": uid,
                 "product": product,
                 "application": application,
                 "outcome": outcome,
-                "lesson": lesson or "",
-                "accuracy_notes": accuracy_notes or "",
-            },
-            headers=headers,
+                "timestamp": str(date.today()),
+            }],
         )
-
-        if resp.status_code != 200:
-            return f"Error: 反馈记录失败 ({resp.status_code}): {resp.text}"
-
-        data = resp.json()
-        msg = data.get("message", "反馈已记录")
-        lid = data.get("loss_review_id")
-        result = f"✅ {msg}"
-        if lid:
-            result += f"\n- 丢单复盘 ID: {lid}"
-        if accuracy_notes:
-            result += "\n- 准度反馈已记录，将用于后续情报包改进"
-
-    # === 自动写入长期记忆 ===
-    if outcome and lesson:
-        try:
-            memory_content = f"[{outcome}] {product} - {application}: {lesson}"
-            vec = mem.embed_text(memory_content)
-            collection = mem.get_chroma_collection()
-            mid = f"mem_{uuid.uuid4().hex[:12]}"
-            collection.add(
-                ids=[mid],
-                embeddings=[vec],
-                documents=[memory_content],
-                metadatas=[{
-                    "category": "feedback",
-                    "user_id": uid,
-                    "product": product,
-                    "outcome": outcome,
-                    "timestamp": str(date.today()),
-                }],
-            )
-        except Exception as e:
-            _log.warning(f"记忆写入失败(feedback): {e}")
+    except Exception as e:
+        _log.warning(f"记忆写入失败(feedback): {e}")
 
     # === 成交率埋点日志 ===
     try:
@@ -705,17 +537,21 @@ async def specq_feedback(
     except Exception:
         pass
 
+    result = f"✅ 反馈已记录。\n- 产品: {product}\n- 结果: {outcome}"
+    if accuracy_notes:
+        result += "\n- 准度反馈已记录，将用于后续情报包改进"
+
     return result
 
 
-# ======================== 本地 LLM 降级辅助 ========================
+# ======================== 本地 LLM 情报生成 ========================
 
 async def _generate_intel_local(
     product: str,
     application: str,
     enhanced_scenario: str,
 ) -> str:
-    """本地 LLM 直接生成情报包。当 FastAPI 不可达时，跳过中转直接调 DeepSeek/Ollama。"""
+    """本地 LLM 直接生成情报包，调 DeepSeek/Ollama。"""
     try:
         import openai
         llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
@@ -797,8 +633,8 @@ async def _generate_intel_local(
 
     except Exception as e:
         _log.error(f"本地 LLM 降级失败: {e}")
-        return f"Error: 情报包生成失败 — FastAPI 不可达且本地 LLM 调用异常: {e}"
+        return f"Error: 情报包生成失败 — 本地 LLM 调用异常: {e}"
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="stdio")
