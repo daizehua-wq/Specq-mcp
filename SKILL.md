@@ -3,13 +3,13 @@ name: specq-intel-sales
 slug: specq-intel-sales
 displayName: SpecQ 攻单情报包
 description: "SpecQ — 半导体产业链销售攻单情报包。输入客户+产品，AI 自动整理暗知识（拜访记录/丢单复盘/竞品情报），生成八模块攻单策略，提高成交率。阶段一聚焦电子化学品。"
-version: "2.1.2"
+version: "2.2.0"
 author: daizehua-wq
 license: Apache-2.0
 tags: [sales, semiconductor, intel, crm, dark-knowledge]
 ---
 
-# SpecQ Skill v2.1 — 半导体产业链销售攻单情报包
+# SpecQ Skill v2.2 — 半导体产业链销售攻单情报包
 
 > 整理暗知识（拜访记录 + 丢单复盘 + 竞品情报）→ 客户画像 + 使用场景 + 竞品动态 + 成交策略 → 提高成交率 | 阶段一聚焦电子化学品
 
@@ -26,35 +26,58 @@ echo "LLM_API_KEY=你的DeepSeek_API_Key" > .env
 
 > **为什么需要单独配置？**
 > 
-> SpecQ MCP Server 独立运行，不共用 Agent 的 LLM。配一个 Key 即可，不需要部署数据库或 Web 服务。
+> SpecQ MCP Server 为纯本地进程，不共用 Agent 的 LLM。配一个 Key 即可，不需要部署数据库或 Web 服务。
 > 
 > **去哪拿 Key？** → [DeepSeek API Keys](https://platform.deepseek.com/api_keys)（新用户送 500 万 tokens）
 > 
 > **不想花钱？** 本地部署 Ollama + Qwen 也能跑，改 `.env` 里 `LLM_BASE_URL` 指向本地。
 
-不配 Key 的唯一后果：Skill 安装成功但所有生成操作报错 `LLM_API_KEY not set`。
-
 ---
 
 ## 📦 安装指引
 
-### OpenClaw
+本 Skill 的 MCP Server 为纯本地进程，Agent 安装后自动以 stdio 模式启动，无需部署服务器。
 
-本 Skill 已接入 OpenClaw MCP：
+### 前置依赖
+
+1. Python 3.10+
+2. `pip install -r requirements.txt`
+3. 在项目目录创建 `.env`，至少配置 `LLM_API_KEY`
+
+### .env 最小配置
+
 ```bash
-openclaw skills install daizehua-wq/specq-intel-sales
+LLM_API_KEY=sk-<your-deepseek-api-key>
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+
+# 可选：Embedding（用于语义记忆搜索）
+EMBEDDING_API_KEY=sk-<your-embedding-api-key>
+EMBEDDING_API_URL=https://api.deepseek.com/v1/embeddings
+EMBEDDING_MODEL=deepseek-embed
 ```
-MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-API-Key）
 
-安装后**立即按上方 ⚠️ 指引配置 LLM_API_KEY**，否则无法使用。
+### Agent 配置
 
-### WorkBuddy（腾讯桌面 Agent）
+Agent 通过 stdio 启动 MCP Server：
 
-在 WorkBuddy 左侧「技能」面板搜索 `specq-intel-sales` 安装本 Skill。
+```json
+{
+  "mcpServers": {
+    "specq": {
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "env": {
+        "LLM_API_KEY": "<your-api-key>",
+        "LLM_BASE_URL": "https://api.deepseek.com",
+        "LLM_MODEL": "deepseek-chat"
+      }
+    }
+  }
+}
+```
 
-安装后，**复制下面这段话发给 WorkBuddy**，它会自动帮你配置 MCP 连接：
-
-> 帮我配置 SpecQ MCP 服务器：从 https://github.com/daizehua-wq/Specq-mcp 下载 specq_mcp_client.py 到本地，然后创建 ~/.workbuddy/mcp.json 加上 specq 配置，命令 python specq_mcp_client.py，环境变量 SPECQ_MCP_URL=http://119.91.223.127:8001/mcp，SPECQ_MCP_API_KEY=填入你的密钥。然后 pip install mcp httpx。另外在项目目录创建 .env，写入 LLM_API_KEY=你的DeepSeek_API_Key。
+---
 
 ## 适用场景
 
@@ -75,7 +98,7 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 
 | Tool | 输入 | 输出 | 说明 |
 |---|---|---|---|
-| `specq_memory` | action, query/content/category... | 记忆操作结果 | **v1.1 新增：三层记忆** |
+| `specq_memory` | action, query/content/category... | 记忆操作结果 | 三层记忆 |
 | `specq_generate_intel` | product, application, scenario | 八模块情报包 Markdown | 核心生成 |
 | `specq_extract_insights` | customer_id（可选）, limit | 结构化洞察 JSON | 暗数据提取 |
 | `specq_log_visit` | customer_id, content, visit_date, visit_type | 拜访记录 ID | 沉淀拜访 |
@@ -83,7 +106,7 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 
 ---
 
-## v1.1 工作流（含三层记忆）
+## v2.2 工作流（纯本地，含三层记忆）
 
 ```
 用户输入
@@ -98,13 +121,15 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 ③ 提取三字段（product / application / scenario）
   → 如果三字段不全 → 追问
   ↓
-④ 暗数据注入（extract_insights + 记忆召回结果）
+④ 暗数据注入（ChromaDB 记忆召回 + 联网搜索）
   ├─ 有暗数据 → 注入到情报包
   └─ 无暗数据 → 标记 [经验推断]
   ↓
-⑤ 生成情报包（specq_generate_intel）
+⑤ 生成情报包（specq_generate_intel → 本地 LLM 直连）
   ↓
-⑥ 输出八模块情报包
+⑥ 自动写回 ChromaDB（category=intel）
+  ↓
+⑦ 输出八模块情报包
 
 【历史记忆】（独立上下文块）
 - 2026-06-20 拜访：关注粗糙度，竞品安美特
@@ -113,9 +138,6 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 【本次情报包】（八模块）
 ...（带数据来源标注）...
 
-  ↓
-⑦ 写入长期记忆（specq_memory.save）
-  → category=intel, content=本次情报包摘要
   ↓
 ⑧ 更新工作记忆（specq_memory.set_plan）
   → 标记当前任务完成
@@ -145,7 +167,7 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 - 同时 save(category="feedback") 写入长期记忆
 - outcome: won（成交）/ lost（丢单）/ follow_up（跟进中）
 
-### 场景 E：多任务（v1.1 新增）
+### 场景 E：多任务
 - get_plan 检查进度 → 知道做到哪了
 - set_plan 设定/更新任务列表
 - 中断后恢复：用户说"继续" → get_plan → 知道从哪开始
@@ -170,7 +192,7 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 
 | 模块 | 内容 | 数据来源 |
 |---|---|---|
-| 1. 产品概览 | 产品定义、核心功能、适用工艺段 | 公开资料 + knowledge.db |
+| 1. 产品概览 | 产品定义、核心功能、适用工艺段 | 公开资料 + 联网搜索 |
 | 2. 技术指标对比 | 关键参数 vs 竞品/行业标准 | 公开资料 + 暗数据 |
 | 3. 竞品格局 | 主要竞品、市占、差异化 | 公开资料 |
 | 4. 客户关注指标 | 该客户/行业重点技术指标 | 暗数据 / [经验推断] |
@@ -221,11 +243,11 @@ MCP Server 地址：`http://119.91.223.127:8001/mcp`（HTTP SSE，已配置 X-AP
 
 **Q: 我的客户数据安全吗？**
 
-情报包输出中客户真实名称会被脱敏为行业标签。暗数据存储在本地的 ChromaDB 和 JSON 文件中，不会上传到任何第三方服务器。整个 Skill 可在内网环境运行。
+情报包输出中客户真实名称会被脱敏为行业标签。暗数据存储在本地 ChromaDB 和 JSON 文件中，不上传任何第三方服务器。整个 Skill 在内网环境运行。
 
-**Q: 服务器连不上怎么办？**
+**Q: 需要部署服务器吗？**
 
-SpecQ 有本地降级模式：当远程服务器不可达时，自动切换到本地 LLM 直连，不影响使用。前提是 `.env` 里配了 `LLM_API_KEY`（见上方 ⚠️ 首次安装必配）。
+不需要。v2.2 起 SpecQ MCP Server 为纯本地进程，Agent 通过 stdio 直接启动，零外部依赖。
 
 **Q: 怎么开始用？**
 
