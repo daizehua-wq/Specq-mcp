@@ -3,59 +3,24 @@ name: specq-intel-sales
 slug: specq-intel-sales
 displayName: SpecQ 攻单情报包
 description: "SpecQ — 半导体产业链销售攻单情报包。输入客户+产品，AI 自动整理暗知识（拜访记录/丢单复盘/竞品情报），生成八模块攻单策略，提高成交率。阶段一聚焦电子化学品。"
-version: "2.2.0"
+version: "2.3.0"
 author: daizehua-wq
 license: Apache-2.0
 tags: [sales, semiconductor, intel, crm, dark-knowledge]
 ---
 
-# SpecQ Skill v2.2 — 半导体产业链销售攻单情报包
+# SpecQ Skill v2.3 — 半导体产业链销售攻单情报包
 
-> 整理暗知识（拜访记录 + 丢单复盘 + 竞品情报）→ 客户画像 + 使用场景 + 竞品动态 + 成交策略 → 提高成交率 | 阶段一聚焦电子化学品
-
-## ⚠️ 首次安装必配
-
-**LLM_API_KEY 是强制依赖，不配 Skill 无法工作。**
-
-SpecQ 的核心能力（情报生成、暗数据合成、行动建议）依赖大模型。安装后**第一步**就是配置 API Key：
-
-```bash
-# 在 SpecQ 项目根目录创建 .env 文件
-echo "LLM_API_KEY=你的DeepSeek_API_Key" > .env
-```
-
-> **为什么需要单独配置？**
-> 
-> SpecQ MCP Server 为纯本地进程，不共用 Agent 的 LLM。配一个 Key 即可，不需要部署数据库或 Web 服务。
-> 
-> **去哪拿 Key？** → [DeepSeek API Keys](https://platform.deepseek.com/api_keys)（新用户送 500 万 tokens）
-> 
-> **不想花钱？** 本地部署 Ollama + Qwen 也能跑，改 `.env` 里 `LLM_BASE_URL` 指向本地。
-
----
+> 整理暗知识（拜访记录 + 丢单复盘 + 竞品情报）→ 客户画像 + 使用场景 + 竞品动态 + 成交策略 → 提高成交率 | 阶段一聚焦电子化学品 | v2.3 零配置
 
 ## 📦 安装指引
 
-本 Skill 的 MCP Server 为纯本地进程，Agent 安装后自动以 stdio 模式启动，无需部署服务器。
+本 Skill 的 MCP Server 为纯本地进程，Agent 安装后自动以 stdio 模式启动，无需部署服务器。v2.3 起通过 MCP Sampling 协议复用 Agent 的 LLM，无需单独配置 API Key。
 
 ### 前置依赖
 
 1. Python 3.10+
 2. `pip install -r requirements.txt`
-3. 在项目目录创建 `.env`，至少配置 `LLM_API_KEY`
-
-### .env 最小配置
-
-```bash
-LLM_API_KEY=sk-<your-deepseek-api-key>
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-
-# 可选：Embedding（用于语义记忆搜索）
-EMBEDDING_API_KEY=sk-<your-embedding-api-key>
-EMBEDDING_API_URL=https://api.deepseek.com/v1/embeddings
-EMBEDDING_MODEL=deepseek-embed
-```
 
 ### Agent 配置
 
@@ -66,12 +31,7 @@ Agent 通过 stdio 启动 MCP Server：
   "mcpServers": {
     "specq": {
       "command": "python",
-      "args": ["mcp_server.py"],
-      "env": {
-        "LLM_API_KEY": "<your-api-key>",
-        "LLM_BASE_URL": "https://api.deepseek.com",
-        "LLM_MODEL": "deepseek-chat"
-      }
+      "args": ["mcp_server.py"]
     }
   }
 }
@@ -106,7 +66,7 @@ Agent 通过 stdio 启动 MCP Server：
 
 ---
 
-## v2.2 工作流（纯本地，含三层记忆）
+## v2.3 工作流（MCP Sampling + 三层记忆）
 
 ```
 用户输入
@@ -125,7 +85,7 @@ Agent 通过 stdio 启动 MCP Server：
   ├─ 有暗数据 → 注入到情报包
   └─ 无暗数据 → 标记 [经验推断]
   ↓
-⑤ 生成情报包（specq_generate_intel → 本地 LLM 直连）
+⑤ 生成情报包（specq_generate_intel → MCP Sampling 调 Agent LLM）
   ↓
 ⑥ 自动写回 ChromaDB（category=intel）
   ↓
@@ -245,9 +205,13 @@ Agent 通过 stdio 启动 MCP Server：
 
 情报包输出中客户真实名称会被脱敏为行业标签。暗数据存储在本地 ChromaDB 和 JSON 文件中，不上传任何第三方服务器。整个 Skill 在内网环境运行。
 
+**Q: 需要配置 API Key 吗？**
+
+v2.3 起不需要。SpecQ 通过 MCP Sampling 协议直接复用 Agent 的 LLM，安装即可使用。
+
 **Q: 需要部署服务器吗？**
 
-不需要。v2.2 起 SpecQ MCP Server 为纯本地进程，Agent 通过 stdio 直接启动，零外部依赖。
+不需要。v2.2 起 SpecQ MCP Server 为纯本地进程，Agent 通过 stdio 直接启动。
 
 **Q: 怎么开始用？**
 

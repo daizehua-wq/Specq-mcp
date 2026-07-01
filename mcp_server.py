@@ -1,6 +1,6 @@
 """
-mcp_server.py — SpecQ MCP Server v2.2
-纯本地独立进程，Agent 直接 stdio 启动，零外部依赖
+mcp_server.py — SpecQ MCP Server v2.3
+纯本地独立进程，Agent 直接 stdio 启动，通过 MCP Sampling 复用 Agent LLM，零 API Key 配置
 Tool 数量: 6（generate_intel / log_visit / extract_insights / feedback / memory / search）
 """
 import json
@@ -8,7 +8,6 @@ import os
 import uuid
 from datetime import date
 
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 import memory as mem
@@ -17,8 +16,6 @@ import multimodal as mm
 import output as out
 
 import logger as log_mod
-
-load_dotenv()
 
 mcp = FastMCP("specq")
 _log = log_mod.get_logger("mcp_server")
@@ -434,24 +431,7 @@ async def specq_extract_insights(
 
     # 调 LLM 提取
     try:
-        import openai
-        llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
-        llm_base = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
-        llm_model = os.getenv("LLM_MODEL", "deepseek-chat")
-        if not llm_api_key:
-            return "Error: LLM_API_KEY 未配置"
-
-        client_llm = openai.AsyncOpenAI(api_key=llm_api_key, base_url=llm_base)
-        resp = await client_llm.chat.completions.create(
-            model=llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-            max_tokens=4000,
-        )
-        result = resp.choices[0].message.content or "[]"
+        result = await _ask_llm(system_prompt, user_prompt, max_tokens=2000)
     except Exception as e:
         return f"Error: LLM 调用失败: {e}"
 
@@ -544,6 +524,38 @@ async def specq_feedback(
     return result
 
 
+# ======================== MCP Sampling LLM 辅助 ========================
+
+async def _ask_llm(system_prompt: str, user_prompt: str, max_tokens: int = 4000) -> str:
+    """通过 MCP Sampling 请求 Agent 的 LLM 生成回复。"""
+    from mcp.types import CreateMessageRequestParams, SamplingMessage, TextContent
+
+    ctx = mcp.get_context()
+    if not ctx:
+        raise RuntimeError("MCP context not available — 当前 Agent 客户端不支持 MCP Sampling")
+
+    result = await ctx.session.create_message(
+        CreateMessageRequestParams(
+            messages=[
+                SamplingMessage(
+                    role="user",
+                    content=TextContent(type="text", text=f"{system_prompt}\n\n---\n\n{user_prompt}"),
+                ),
+            ],
+            max_tokens=max_tokens,
+            temperature=0.3,
+        )
+    )
+    content = result.content
+    if isinstance(content, TextContent):
+        return content.text
+    if isinstance(content, list):
+        for part in content:
+            if hasattr(part, 'text'):
+                return part.text
+    return str(content)
+
+
 # ======================== 本地 LLM 情报生成 ========================
 
 async def _generate_intel_local(
@@ -551,25 +563,8 @@ async def _generate_intel_local(
     application: str,
     enhanced_scenario: str,
 ) -> str:
-    """本地 LLM 直接生成情报包，调 DeepSeek/Ollama。"""
-    try:
-        import openai
-        llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
-        llm_base = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
-        llm_model = os.getenv("LLM_MODEL", "deepseek-chat")
-        if not llm_api_key:
-            return (
-                "Error: LLM_API_KEY 未配置 — SpecQ 需要 LLM 才能生成情报包。\n"
-                "请在项目根目录创建 .env 文件：\n"
-                "  echo 'LLM_API_KEY=sk-xxx' > .env\n"
-                "或本地部署 Ollama，设置：\n"
-                "  LLM_BASE_URL=http://localhost:11434/v1\n"
-                "  LLM_MODEL=qwen3\n"
-            )
-
-        client_llm = openai.AsyncOpenAI(api_key=llm_api_key, base_url=llm_base)
-
-        system_prompt = """你是半导体产业链电子化学品销售专家 FAE。根据输入的产品信息、应用场景和历史数据，生成一份结构化的攻单情报包。
+    """通过 MCP Sampling 调用 Agent 的 LLM 生成情报包。"""
+    system_prompt = """你是半导体产业链电子化学品销售专家 FAE。根据输入的产品信息、应用场景和历史数据，生成一份结构化的攻单情报包。
 
 严格按以下八模块输出 Markdown：
 
@@ -612,7 +607,7 @@ async def _generate_intel_local(
 - 不编造具体客户名称、联系方式
 - 直接输出 Markdown，不要输出前言/后缀寒暄"""
 
-        user_prompt = f"""生成以下产品的攻单情报包：
+    user_prompt = f"""生成以下产品的攻单情报包：
 
 产品：{product}
 应用场景：{application}
@@ -620,20 +615,11 @@ async def _generate_intel_local(
 附加上下文：
 {enhanced_scenario}"""
 
-        resp = await client_llm.chat.completions.create(
-            model=llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-            max_tokens=4000,
-        )
-        return resp.choices[0].message.content or "（情报包生成返回为空）"
-
+    try:
+        return await _ask_llm(system_prompt, user_prompt)
     except Exception as e:
-        _log.error(f"本地 LLM 降级失败: {e}")
-        return f"Error: 情报包生成失败 — 本地 LLM 调用异常: {e}"
+        _log.error(f"LLM Sampling 失败: {e}")
+        return f"Error: 情报包生成失败 — Agent LLM 调用异常: {e}"
 
 
 if __name__ == "__main__":
